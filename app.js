@@ -4,10 +4,12 @@ const SUPABASE_PUBLISHABLE_KEY = 'sb_publishable_eqk6W5j22zTfcpmLXq-1vg_hvrTAO9d
 'use strict';
 const TEAM = [{"dept": "社長室", "name": "レオ", "item": "<path d=\"M48 22L43 5 58 13 70 1 82 13 97 5 92 22Z\" fill=\"#dfb95e\" stroke=\"#b89547\" stroke-width=\"2\"/><circle cx=\"70\" cy=\"15\" r=\"3\" fill=\"#fff3cc\"/>"}, {"dept": "秘書", "name": "サク", "item": "<g transform=\"rotate(-9 24 80)\"><rect x=\"8\" y=\"63\" width=\"29\" height=\"35\" rx=\"4\" fill=\"#d1aaa0\" stroke=\"#a67f75\" stroke-width=\"1.5\"/><path d=\"M15 64v33M20 72h12M20 78h12M20 84h8\" stroke=\"#fff3dc\" stroke-width=\"1.5\"/><path d=\"M10 69h7M10 77h7M10 85h7M10 93h7\" stroke=\"#8a7566\" stroke-width=\"2\"/></g><g transform=\"rotate(20 117 78)\"><path d=\"M115 61h5v29l-2.5 6-2.5-6Z\" fill=\"#87967b\" stroke=\"#65765f\" stroke-width=\"1.5\"/><path d=\"M115 66h5M115 88h5\" stroke=\"#f9e9be\" stroke-width=\"2\"/></g>"}, {"dept": "Instagram", "name": "ミラ", "item": "<g transform=\"rotate(-12 29 80)\"><rect x=\"16\" y=\"67\" width=\"17\" height=\"26\" rx=\"3\" fill=\"#d3a6a0\" stroke=\"#a97e79\"/><rect x=\"19\" y=\"70\" width=\"11\" height=\"17\" rx=\"1\" fill=\"#fff3e4\"/></g><path d=\"M112 28C101 18 98 34 112 41C127 31 122 20 112 28Z\" fill=\"#dba5a0\"/>"}, {"dept": "Hot Pepper", "name": "ベル", "item": "<g transform=\"rotate(-10 25 82)\"><rect x=\"10\" y=\"67\" width=\"26\" height=\"30\" rx=\"3\" fill=\"#b4bc9b\" stroke=\"#889371\"/><path d=\"M15 74h17M16 81h14M16 87h10\" stroke=\"#fff7de\" stroke-width=\"2\"/><path d=\"M16 64v6M28 64v6\" stroke=\"#807b61\" stroke-width=\"2\"/></g>"}, {"dept": "経理", "name": "エン", "item": "<rect x=\"105\" y=\"76\" width=\"23\" height=\"29\" rx=\"3\" fill=\"#b3b6a5\" stroke=\"#858d79\"/><path d=\"M110 82h13M110 89h3m5 0h4m-12 6h3m5 0h4\" stroke=\"#fdf8e6\" stroke-width=\"3\"/><circle cx=\"22\" cy=\"89\" r=\"10\" fill=\"#e2bf69\" stroke=\"#b89a4f\"/><text x=\"22\" y=\"93\" text-anchor=\"middle\" font-size=\"12\" fill=\"#947833\">¥</text>"}, {"dept": "マインド", "name": "ヒラ", "item": "<g stroke=\"#bfa250\" stroke-width=\"2\"><path d=\"M104 25a11 11 0 1 1 17 0l-3 6h-11Z\" fill=\"#f7df88\"/><path d=\"M107 35h11M108 39h9M112 4V0M97 12l-5-3M128 12l5-3\" fill=\"none\"/></g>"}, {"dept": "EC企画", "name": "ポチ", "item": "<path d=\"M104 74h25l3 29h-31Z\" fill=\"#d6ad88\" stroke=\"#b58e67\" stroke-width=\"1.5\"/><path d=\"M110 77v-5a7 7 0 0 1 14 0v5\" fill=\"none\" stroke=\"#a17c57\" stroke-width=\"2\"/><path d=\"M111 88l5 5 8-10\" fill=\"none\" stroke=\"#fff5dc\" stroke-width=\"2\"/>"}, {"dept": "動画編集", "name": "カット", "item": "<g transform=\"rotate(-10 25 79)\"><rect x=\"7\" y=\"72\" width=\"33\" height=\"25\" rx=\"3\" fill=\"#697367\" stroke=\"#4e5a4c\" stroke-width=\"1.5\"/><path d=\"M8 72L5 62 36 53 39 63Z\" fill=\"#fff6df\" stroke=\"#4e5a4c\" stroke-width=\"1.5\"/><path d=\"M11 60l7 7m3-10 7 7m3-10 6 6\" stroke=\"#697367\" stroke-width=\"4\"/><path d=\"M13 80h21M13 86h14\" stroke=\"#fff6df\" stroke-width=\"1.5\"/></g>"}];
 const STATUS = {open:'未対応',doing:'対応中',review:'確認待ち',done:'完了'};
+const DRAFT_KINDS = {blog:'ブログ',profile:'プロフィール',review:'口コミ返信',style:'スタイル',caption:'キャプション',other:'その他'};
+const DRAFT_STATUS = {draft:'下書き',ready:'確定',used:'使用済み'};
 const STORES = {tenjin:'天神',hakata:'博多',common:'共通'};
 const $ = id => document.getElementById(id);
 let db, userId = null, epoch = 0, loaded = false, refreshing = false, view = 'floor';
-let records = {instructions:[],ideas:[],summaries:[]};
+let records = {instructions:[],ideas:[],summaries:[],drafts:[]};
 let motionFrame = 0, outing = null, nextWalk = 0, walkerIndex = 0;
 let replyTimers = [], replying = false;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -84,10 +86,10 @@ function askMembers(dept = null) {
   replyTimers.push(setTimeout(() => { clearReplies(); startMotion(); }, (members.length - 1) * 900 + 12000));
 }
 function showView(next, focus = false) {
-  if (!['floor','instructions','ideas'].includes(next)) next = 'floor';
+  if (!['floor','instructions','ideas','drafts'].includes(next)) next = 'floor';
   clearReplies();
   view = next;
-  for (const name of ['floor','instructions','ideas']) $(name+'-view').hidden = name !== next;
+  for (const name of ['floor','instructions','ideas','drafts']) $(name+'-view').hidden = name !== next;
   document.querySelectorAll('nav [data-view]').forEach(button => {
     if (button.dataset.view === next) button.setAttribute('aria-current','page');
     else button.removeAttribute('aria-current');
@@ -171,7 +173,55 @@ function renderIdeas() {
   }
   $('summarize').disabled=!records.ideas.length;
 }
-function renderAll() { renderFloor();renderInstructions();renderIdeas(); }
+// Draft text is always rendered as text, including server-provided content.
+function renderDrafts() {
+  const target=$('draft-list');target.replaceChildren();
+  const rows=records.drafts.filter(row=>!$('draft-filter-department').value||row.department===$('draft-filter-department').value);
+  for(const row of rows) {
+    const article=element('article','entry');
+    const details=element('details','draft-detail');
+    const summary=element('summary');
+    const top=element('span','entry-top');
+    const time=element('time','',dateFormat.format(new Date(row.created_at)));time.dateTime=row.created_at;
+    top.append(element('span','department-tag',row.department),element('span','',DRAFT_KINDS[row.kind]),element('span','',DRAFT_STATUS[row.status]),time);
+    summary.append(top,element('span','draft-heading',row.title||row.body.slice(0,80)));
+    details.append(summary);
+    const feedback=element('p','copy-feedback');feedback.setAttribute('role','status');
+    for(const [label,text] of [['タイトル',row.title],['本文',row.body]]) {
+      if(label==='タイトル'&&!text)continue;
+      const block=element('div','draft-text');
+      const copy=element('button','',label+'をコピー');copy.type='button';
+      copy.addEventListener('click',async()=> {
+        const snapshot=epoch;copy.disabled=true;
+        try {await navigator.clipboard.writeText(text);if(snapshot===epoch)feedback.textContent=label+'をコピーしました。';}
+        catch(error){if(snapshot===epoch)feedback.textContent='コピーできませんでした。文章を選択してコピーしてください。';}
+        finally{copy.disabled=false;}
+      });
+      block.append(element('h3','',label),element('p','entry-body',text),copy);details.append(block);
+    }
+    const actions=element('div','draft-actions');
+    for(const [status,label] of [['ready','確定にする'],['used','使用済みにする'],['draft','下書きに戻す']]) {
+      if(row.status===status)continue;
+      const button=element('button','',label);button.type='button';
+      button.addEventListener('click',()=>mutate(button,async()=> {
+        const {data,error}=await db.from('drafts').update({status}).eq('id',row.id).select('id');
+        if(error)throw error;if(!data.length)throw new Error('下書きが見つかりません。更新してください。');
+      },'下書きの状態を変更しました。'));actions.append(button);
+    }
+    const remove=element('button','delete','削除');remove.type='button';
+    remove.addEventListener('click',async()=> {
+      const snapshot=epoch;
+      if(!await confirmDelete()||snapshot!==epoch)return;
+      mutate(remove,async()=> {
+        const {data,error}=await db.from('drafts').delete().eq('id',row.id).select('id');
+        if(error)throw error;if(!data.length)throw new Error('下書きが見つかりません。更新してください。');
+      },'下書きを削除しました。');
+    });
+    actions.append(remove);details.append(feedback,actions);article.append(details);target.append(article);
+  }
+  if(!rows.length)empty(target,'下書きはまだありません。完成した文章を置いておこう。');
+}
+function renderAll() { renderFloor();renderInstructions();renderIdeas();renderDrafts(); }
 async function fetchAll() {
   const snapshot = epoch;
   const result=await Promise.all(Object.keys(records).map(async table=> {
@@ -214,10 +264,10 @@ function confirmDelete() {
   return new Promise(resolve=>dialog.addEventListener('close',()=>resolve(dialog.returnValue==='delete'),{once:true}));
 }
 function resetPrivateData() {
-  clearReplies();epoch++;loaded=false;records={instructions:[],ideas:[],summaries:[]};stopMotion();
+  clearReplies();epoch++;loaded=false;records={instructions:[],ideas:[],summaries:[],drafts:[]};stopMotion();
   $('workspace').hidden=true;$('login').hidden=false;$('content').hidden=true;
-  for(const id of ['stats','stations','member-list','instruction-list','idea-list','summary-list'])$(id).replaceChildren();
-  $('instruction-form').reset();$('idea-form').reset();$('login-form').reset();notify('');
+  for(const id of ['stats','stations','member-list','instruction-list','idea-list','summary-list','draft-list'])$(id).replaceChildren();
+  $('instruction-form').reset();$('idea-form').reset();$('draft-form').reset();$('draft-filter-department').value='';$('login-form').reset();notify('');
   if($('delete-dialog').open)$('delete-dialog').close('cancel');
 }
 function acceptSession(session) {
@@ -277,6 +327,18 @@ $('today').textContent=new Intl.DateTimeFormat('ja-JP',{year:'numeric',month:'lo
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>showView(button.dataset.view,true)));
 document.querySelector('.brand').addEventListener('click',event=>{event.preventDefault();showView('floor');});
 $('filter-department').addEventListener('change',renderInstructions);$('filter-status').addEventListener('change',renderInstructions);
+$('draft-filter-department').addEventListener('change',renderDrafts);
+$('draft-form').addEventListener('submit',event=> {
+  event.preventDefault();const form=event.currentTarget,body=form.elements.body.value.trim();
+  if(!body){form.elements.body.setCustomValidity('本文を入力してください。');form.elements.body.reportValidity();return;}
+  const row={department:form.elements.department.value,kind:form.elements.kind.value,title:form.elements.title.value,body,status:'draft'};
+  const snapshot=epoch;
+  mutate(form.querySelector('button'),async()=> {
+    const {error}=await db.from('drafts').insert(row);if(error)throw error;
+    if(snapshot===epoch){form.elements.title.value='';form.elements.body.value='';}
+  },'下書きを保存しました。');
+});
+$('draft-form').elements.body.addEventListener('input',event=>event.target.setCustomValidity(''));
 $('refresh').addEventListener('click',refresh);
 $('ask-all').addEventListener('click',()=>askMembers());
 for(const [id,table] of [['instruction-form','instructions'],['idea-form','ideas']]) {
