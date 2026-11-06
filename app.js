@@ -9,6 +9,7 @@ const $ = id => document.getElementById(id);
 let db, userId = null, epoch = 0, loaded = false, refreshing = false, view = 'floor';
 let records = {instructions:[],ideas:[],summaries:[]};
 let motionFrame = 0, outing = null, nextWalk = 0, walkerIndex = 0;
+let replyTimers = [], replying = false;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
 const dateFormat = new Intl.DateTimeFormat('ja-JP',{month:'numeric',day:'numeric',hour:'2-digit',minute:'2-digit'});
 function element(tag, className, text) {
@@ -27,8 +28,64 @@ function departmentState(dept) {
   const row = status ? rows.find(row => row.status === status) : null;
   return {status: status || 'idle', label: status === 'open' ? '未対応の指示あり' : status ? STATUS[status] : '待機中', body: row?.body || ''};
 }
+// Replies use only the current, successfully loaded records. No network requests.
+function replyText(dept) {
+  if (dept === '社長室') return '全員動いてる？';
+  const rows = records.instructions.filter(row => dept === '秘書' || row.department === dept);
+  const counts = Object.fromEntries(['open','doing','review'].map(status =>
+    [status, rows.filter(row => row.status === status).length]));
+  const countsText = ['open','doing','review'].map(status => `${STATUS[status]}${counts[status]}件`).join('、');
+  let text;
+  if (dept === '秘書') {
+    const departments = [...new Set(rows.filter(row => row.status === 'review').map(row => row.department))];
+    text = `全体では${countsText}です。`;
+    if (departments.length) text += `確認待ちの部署：${departments.join('、')}。`;
+  } else {
+    const active = rows.filter(row => ['open','doing','review'].includes(row.status));
+    // Select the latest review first, otherwise the latest unfinished instruction.
+    const latest = list => list.reduce((a,b) => !a || String(b.created_at || '') > String(a.created_at || '') ? b : a, null);
+    const row = latest(active.filter(row => row.status === 'review')) || latest(active);
+    if (!row) text = '待機中です。今は抱えている指示はありません。';
+    else {
+      text = counts.review ? `確認待ちが${counts.review}件あります。${countsText}です。`
+        : `${counts.doing ? '対応中の指示があります' : '未対応の指示があります'}。${countsText}です。`;
+      const body = String(row.body || '').replace(/\s+/g,' ').trim();
+      if (body) text += `「${body.slice(0,32)}${body.length > 32 ? '…' : ''}」です。`;
+    }
+  }
+  const ideas = records.ideas.filter(row => row.department === dept).length;
+  if (ideas) text += `アイデアが${ideas}件たまっています。`;
+  return text;
+}
+function clearReplies() {
+  replyTimers.forEach(clearTimeout); replyTimers = []; replying = false;
+  [...$('stations').children].forEach((station,index) => {
+    const bubble = station.querySelector('.bubble');
+    if (!bubble) return;
+    const state = departmentState(TEAM[index].dept);
+    bubble.textContent = state.body.slice(0,28); bubble.hidden = !state.body;
+    station.classList.remove('replying');
+  });
+}
+function askMembers(dept = null) {
+  if (!loaded || refreshing || !userId || view !== 'floor') return;
+  clearReplies(); stopMotion(); replying = true;
+  const members = dept ? TEAM.filter(member => member.dept === dept) : TEAM;
+  members.forEach((member,index) => {
+    const speak = () => {
+      const station = $('stations').children[TEAM.indexOf(member)];
+      const bubble = station.querySelector('.bubble');
+      bubble.textContent = replyText(member.dept); bubble.hidden = false;
+      station.classList.add('replying');
+    };
+    if (index === 0) speak();
+    else replyTimers.push(setTimeout(speak,index * 900));
+  });
+  replyTimers.push(setTimeout(() => { clearReplies(); startMotion(); }, (members.length - 1) * 900 + 12000));
+}
 function showView(next, focus = false) {
   if (!['floor','instructions','ideas'].includes(next)) next = 'floor';
+  clearReplies();
   view = next;
   for (const name of ['floor','instructions','ideas']) $(name+'-view').hidden = name !== next;
   document.querySelectorAll('nav [data-view]').forEach(button => {
@@ -45,7 +102,7 @@ function openDepartment(dept) {
   renderInstructions(); showView('instructions',true);
 }
 function renderFloor() {
-  stopMotion(); $('stats').replaceChildren(); $('stations').replaceChildren();
+  clearReplies(); stopMotion(); $('stats').replaceChildren(); $('stations').replaceChildren();
   for (const [status,label] of Object.entries(STATUS)) {
     const item = element('div','stat');
     item.append(element('span','',label),element('strong','',String(records.instructions.filter(r=>r.status===status).length)));
@@ -54,13 +111,19 @@ function renderFloor() {
   TEAM.forEach((member,index) => {
     const state = departmentState(member.dept);
     const button = element('button','station'); button.type = 'button'; button.dataset.index = index;
-    button.setAttribute('aria-label',`${member.dept}、${member.name}、${state.label}。指示を見る`);
+    button.setAttribute('aria-label',`${member.dept}、${member.name}、${state.label}。返事を聞く`);
     // Only fixed, trusted SVG artwork from the v6 prototype is inserted as markup.
     button.innerHTML = `<svg class="character" viewBox="0 0 140 125" aria-hidden="true"><use href="#fluffy"/>${member.item}</svg>`;
     const bubble = element('span','bubble',state.body.slice(0,28)); bubble.hidden = !state.body;
+    bubble.setAttribute('role','status'); bubble.setAttribute('aria-live','polite'); bubble.setAttribute('aria-atomic','true');
     const label = element('span','state',state.label); label.dataset.status = state.status;
     button.append(bubble,element('span','plaque',member.dept),element('span','person',member.name),label);
-    button.addEventListener('click',()=>openDepartment(member.dept)); $('stations').append(button);
+    button.addEventListener('click',()=>askMembers(member.dept)); $('stations').append(button);
+  });
+  $('member-list').replaceChildren();
+  TEAM.forEach(member => {
+    const button = element('button','',`${member.name}（${member.dept}）`); button.type = 'button';
+    button.addEventListener('click',()=>openDepartment(member.dept)); $('member-list').append(button);
   });
   positionStations(); if (view === 'floor') startMotion();
 }
@@ -124,7 +187,7 @@ async function fetchAll() {
   records=Object.fromEntries(result);loaded=true;renderAll();$('content').hidden=false;return true;
 }
 async function refresh() {
-  if(!userId||refreshing)return;refreshing=true;$('refresh').disabled=true;stopMotion();
+  if(!userId||refreshing)return;refreshing=true;clearReplies();$('refresh').disabled=true;stopMotion();
   $('loading').hidden=false;
   try { await fetchAll();notify(''); }
   catch(error) {loaded=false;$('content').hidden=true;notify('データを取得できませんでした。「更新」で再試行してください。\n'+error.message,true);}
@@ -151,9 +214,9 @@ function confirmDelete() {
   return new Promise(resolve=>dialog.addEventListener('close',()=>resolve(dialog.returnValue==='delete'),{once:true}));
 }
 function resetPrivateData() {
-  epoch++;loaded=false;records={instructions:[],ideas:[],summaries:[]};stopMotion();
+  clearReplies();epoch++;loaded=false;records={instructions:[],ideas:[],summaries:[]};stopMotion();
   $('workspace').hidden=true;$('login').hidden=false;$('content').hidden=true;
-  for(const id of ['stats','stations','instruction-list','idea-list','summary-list'])$(id).replaceChildren();
+  for(const id of ['stats','stations','member-list','instruction-list','idea-list','summary-list'])$(id).replaceChildren();
   $('instruction-form').reset();$('idea-form').reset();$('login-form').reset();notify('');
   if($('delete-dialog').open)$('delete-dialog').close('cancel');
 }
@@ -171,7 +234,7 @@ function stopMotion() {
   if(outing){outing.station.classList.remove('away');outing.actor.remove();outing=null;}
 }
 function startMotion() {
-  if(!loaded||!userId||view!=='floor'||document.hidden||reducedMotion.matches||motionFrame)return;
+  if(replying||!loaded||!userId||view!=='floor'||document.hidden||reducedMotion.matches||motionFrame)return;
   nextWalk=performance.now()+2200;motionFrame=requestAnimationFrame(animateOffice);
 }
 function makeWalk(now) {
@@ -215,6 +278,7 @@ document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener
 document.querySelector('.brand').addEventListener('click',event=>{event.preventDefault();showView('floor');});
 $('filter-department').addEventListener('change',renderInstructions);$('filter-status').addEventListener('change',renderInstructions);
 $('refresh').addEventListener('click',refresh);
+$('ask-all').addEventListener('click',()=>askMembers());
 for(const [id,table] of [['instruction-form','instructions'],['idea-form','ideas']]) {
   $(id).addEventListener('submit',event=> {
     event.preventDefault();const form=event.currentTarget,body=form.elements.body.value.trim();
@@ -249,7 +313,7 @@ $('logout').addEventListener('click',async()=> {
 });
 window.addEventListener('resize',()=>{stopMotion();positionStations();startMotion();});
 reducedMotion.addEventListener('change',()=>{stopMotion();startMotion();});
-document.addEventListener('visibilitychange',()=>{stopMotion();if(!document.hidden&&userId)refresh();});
+document.addEventListener('visibilitychange',()=>{clearReplies();stopMotion();if(!document.hidden&&userId)refresh();});
 async function initialize() {
   if(SUPABASE_URL==='YOUR_SUPABASE_URL'||SUPABASE_PUBLISHABLE_KEY==='YOUR_SUPABASE_PUBLISHABLE_KEY') {
     $('login-message').textContent='接続設定が必要です。README.md に沿って app.js の接続情報を設定してください。';$('login-button').disabled=true;return;
