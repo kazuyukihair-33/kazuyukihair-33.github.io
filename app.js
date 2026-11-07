@@ -11,6 +11,7 @@ const $ = id => document.getElementById(id);
 let db, userId = null, epoch = 0, loaded = false, refreshing = false, view = 'floor';
 let records = {instructions:[],ideas:[],summaries:[],drafts:[],records:[],trend_words:[]};
 let recordTag = '';
+let blogVariant = 0, blogPreview = null;
 let motionFrame = 0, outing = null, nextWalk = 0, walkerIndex = 0;
 let replyTimers = [], replying = false;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -243,13 +244,63 @@ function checkDraft({title='',body='',kind}) {
   const warnings=[],text=title+'\n'+body;
   for(const word of ['最強','俺','個性派','派手髪','ぶち抜く'])if(text.includes(word))warnings.push('使わない言葉：'+word);
   if((text.match(/[#＃][^\s#＃]+/gu)||[]).length>=6)warnings.push('ハッシュタグは5個までです。');
-  if(kind==='blog'&&[...title].length>25)warnings.push('ブログのタイトルは25字までです。');
+  if(kind==='blog'&&blogTitleLength(title)>25)warnings.push('ブログのタイトルは25字までです。');
   if(kind==='blog'||kind==='profile'){
     if(/[\u{1F000}-\u{1FAFF}\u2600-\u27BF\u2300-\u23FF\uFE0F\u20E3]/u.test(body))warnings.push('本文に絵文字が含まれています。');
     if(body.includes('・'))warnings.push('本文に中点「・」が含まれています。');
   }
   return warnings;
 }
+// Full-width characters count as 1; ASCII and half-width forms count as 0.5.
+function blogTitleLength(text) {
+  return [...text].reduce((total,char)=>total+(/[\u0000-\u007f\uff61-\uff9f]/u.test(char)?0.5:1),0);
+}
+function generateBlog(input, variant = 0) {
+  const color=String(input.color||'').trim(),bleach=input.bleach||'2回',feature=input.feature||'透明感';
+  if(!color)throw new Error('色名を入力してください。');
+  const concern=String(input.concern||'').trim(),point=String(input.point||'').trim();
+  const noBleach=bleach==='なし',tenjin=input.store!=='hakata';
+  const turn=((Math.trunc(Number(variant))||0)%3+3)%3;
+  const candidates=noBleach
+    ?[`ブリーチなしで作る${color}`,`色落ちまで考える${color}`,`${feature}の${color}はブリーチなしで`]
+    :[`ブリーチ${bleach}で作る${color}`,`色落ちまで考える${color}`,`${color}、ブリーチ${bleach}の記録`];
+  const ordered=candidates.slice(turn).concat(candidates.slice(0,turn));
+  const title=ordered.find(text=>blogTitleLength(text)<=25)||candidates.reduce((a,b)=>blogTitleLength(a)<=blogTitleLength(b)?a:b);
+  const method=noBleach?'ブリーチなし':`ブリーチ${bleach}`;
+  const intros=[`${color}は、${method}で作る${feature}カラーです。`,`${method}で作る${color}。${feature}を大切にしたカラーです。`,`${feature}を楽しむ${color}は、${method}で作るカラーです。`];
+  const features={透明感:'明るくしすぎず、肌なじみの良さと柔らかさを残せるのが特徴です。',艶:'表面の艶を残し、落ち着いた印象に仕上がります。',柔らかさ:'硬く見えやすい髪も、柔らかい質感に見せてくれます。',深み:'明度を落として深みを出すことで、落ち着いた色味が出ます。'};
+  const paragraphs=[intros[turn]+features[feature],noBleach
+    ?'色落ちは少しずつ穏やかに抜けていきます。落ちてきた時の色まで考えて染めるので、次の来店まで楽しめます。'
+    :'色落ちは、黄色みを抑えながら少しずつ抜けていきます。落ちてきた時の色まで考えて染めるので、2週間後、1か月後の髪も楽しめます。'];
+  if(point)paragraphs.push(`今回大切にしたのは、${point}です。`);
+  paragraphs.push((concern?`${concern}というお悩みには、施術の組み立てとホームケアで向き合います。`:'')+'続けるためのポイントは、日々のホームケアです。色を入れた直後は洗浄力の優しいシャンプーを使い、熱を当てすぎないこと。ご来店時に、今の髪に合うケアもお伝えします。');
+  paragraphs.push(tenjin
+    ?(noBleach?'ブリーチに不安がある方も、':'初めてのブリーチで不安な方も、')+'髪の履歴と状態を見てから、できることと難しいことを先にお伝えします。気になる方はお気軽にご相談ください！'
+    :'落ち着いた色味が好きな方や、仕事で明るさに制限がある方にも合わせやすいカラーです。気になる方はお気軽にご相談ください！');
+  if(tenjin)paragraphs.push('福岡天神 JILL by GiseL 店長 鶴岡和幸');
+  return {title,body:paragraphs.join('\n\n')};
+}
+function createBlogPreview() {
+  const form=$('blog-form');
+  if(!form.elements.color.value.trim()){
+    $('blog-message').textContent='色名を入力してください。';form.elements.color.focus();return;
+  }
+  const input=Object.fromEntries(new FormData(form));
+  blogPreview=generateBlog(input,blogVariant++);
+  $('blog-title').textContent=blogPreview.title;$('blog-body').textContent=blogPreview.body;
+  $('blog-signature-note').hidden=input.store!=='hakata';
+  const checks=$('blog-checks');checks.replaceChildren();
+  const warnings=checkDraft({...blogPreview,kind:'blog'});
+  checks.append(element('p','',`タイトル：${blogTitleLength(blogPreview.title)} / 25字`));
+  if(warnings.length){const list=element('ul');warnings.forEach(text=>list.append(element('li','',text)));checks.append(list);}
+  else checks.append(element('p','','チェックOK'));
+  $('blog-preview').hidden=false;$('blog-message').textContent='ブログを作成しました。';
+}
+async function saveGeneratedBlog(blog) {
+  const {error}=await db.from('drafts').insert({department:'Hot Pepper',kind:'blog',status:'draft',title:blog.title,body:blog.body});
+  if(error)throw error;
+}
+
 function recordImagePath(url) {
   try {
     const parsed=new URL(url),base=new URL(SUPABASE_URL),prefix='/storage/v1/object/public/records/';
@@ -365,6 +416,8 @@ function resetPrivateData() {
   clearReplies();epoch++;loaded=false;records={instructions:[],ideas:[],summaries:[],drafts:[],records:[],trend_words:[]};stopMotion();
   $('workspace').hidden=true;$('login').hidden=false;$('content').hidden=true;
   for(const id of ['stats','stations','member-list','instruction-list','idea-list','summary-list','draft-list','record-list','trend-list'])$(id).replaceChildren();
+  blogVariant=0;blogPreview=null;$('blog-form').reset();$('blog-preview').hidden=true;
+  $('blog-title').textContent='';$('blog-body').textContent='';$('blog-checks').replaceChildren();$('blog-message').textContent='';
   recordTag='';$('record-form').reset();$('trend-form').reset();$('instruction-result').textContent='';
   $('instruction-form').reset();$('idea-form').reset();$('draft-form').reset();$('draft-filter-department').value='';$('login-form').reset();notify('');
   if($('delete-dialog').open)$('delete-dialog').close('cancel');
@@ -423,6 +476,17 @@ for(const select of document.querySelectorAll('.department-select')) {
   if(select.dataset.all){const all=element('option','','すべての部署');all.value='';select.append(all);}
   TEAM.forEach(m=>{const option=element('option','',m.dept);option.value=m.dept;select.append(option);});
 }
+
+$('blog-form').addEventListener('submit',event=>{event.preventDefault();createBlogPreview();});
+$('blog-regenerate').addEventListener('click',createBlogPreview);
+$('blog-save').addEventListener('click',()=>{
+  if(!blogPreview||$('blog-save').disabled)return;
+  const blog={...blogPreview},snapshot=epoch;
+  mutate($('blog-save'),async()=>{
+    await saveGeneratedBlog(blog);
+    if(snapshot===epoch)$('draft-filter-department').value='';
+  },'ブログを下書きに保存しました。');
+});
 
 $('record-filter-clear').addEventListener('click',()=>{recordTag='';renderRecords();});
 $('record-form').addEventListener('submit',event=>{

@@ -22,3 +22,6 @@ nav{flex-wrap:wrap}nav button{min-width:0;flex:1 1 130px}
 .draft-checks{border-top:1px solid var(--line);margin-top:20px;padding-top:16px;font-size:12px}.draft-checks p{margin:8px 0;color:var(--green)}.draft-checks ul{padding-left:22px;color:#a3544b}
 #instruction-result{display:block;margin-top:8px}
 @media(max-width:650px){nav button{flex:1 1 calc(33.333% - 8px);font-size:11px}.record-filter{flex-wrap:wrap}}
+
+/* v11: local template blog writer */
+.blog-writer{margin-bottom:28px}.blog-actions{display:flex;flex-wrap:wrap;gap:10px}#blog-message:empty{display:none}#blog-message{margin:0}#blog-preview{margin-top:16px}#blog-signature-note{display:block;margin-bottom:16px}#blog-preview .entry-body{user-select:text}#blog-save{margin-top:16px}
