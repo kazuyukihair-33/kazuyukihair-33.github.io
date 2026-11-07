@@ -9,7 +9,8 @@ const DRAFT_STATUS = {draft:'下書き',ready:'確定',used:'使用済み'};
 const STORES = {tenjin:'天神',hakata:'博多',common:'共通'};
 const $ = id => document.getElementById(id);
 let db, userId = null, epoch = 0, loaded = false, refreshing = false, view = 'floor';
-let records = {instructions:[],ideas:[],summaries:[],drafts:[]};
+let records = {instructions:[],ideas:[],summaries:[],drafts:[],records:[],trend_words:[]};
+let recordTag = '';
 let motionFrame = 0, outing = null, nextWalk = 0, walkerIndex = 0;
 let replyTimers = [], replying = false;
 const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
@@ -86,10 +87,10 @@ function askMembers(dept = null) {
   replyTimers.push(setTimeout(() => { clearReplies(); startMotion(); }, (members.length - 1) * 900 + 12000));
 }
 function showView(next, focus = false) {
-  if (!['floor','instructions','ideas','drafts'].includes(next)) next = 'floor';
+  if (!['floor','instructions','ideas','drafts','records','trends'].includes(next)) next = 'floor';
   clearReplies();
   view = next;
-  for (const name of ['floor','instructions','ideas','drafts']) $(name+'-view').hidden = name !== next;
+  for (const name of ['floor','instructions','ideas','drafts','records','trends']) $(name+'-view').hidden = name !== next;
   document.querySelectorAll('nav [data-view]').forEach(button => {
     if (button.dataset.view === next) button.setAttribute('aria-current','page');
     else button.removeAttribute('aria-current');
@@ -199,6 +200,11 @@ function renderDrafts() {
       });
       block.append(element('h3','',label),element('p','entry-body',text),copy);details.append(block);
     }
+    const checks=element('section','draft-checks');checks.append(element('h3','','チェック結果'));
+    const warnings=checkDraft(row);
+    if(warnings.length){const list=element('ul');warnings.forEach(text=>list.append(element('li','',text)));checks.append(list);}
+    else checks.append(element('p','','チェックOK'));
+    details.append(checks);
     const actions=element('div','draft-actions');
     for(const [status,label] of [['ready','確定にする'],['used','使用済みにする'],['draft','下書きに戻す']]) {
       if(row.status===status)continue;
@@ -221,7 +227,99 @@ function renderDrafts() {
   }
   if(!rows.length)empty(target,'下書きはまだありません。完成した文章を置いておこう。');
 }
-function renderAll() { renderFloor();renderInstructions();renderIdeas();renderDrafts(); }
+
+// Pure helpers: priority follows the keyword groups in PROMPT-v10-complete.md.
+function routeInstruction(body) {
+  const text=String(body);
+  if(/ブログ|ホットペッパー|HPB|口コミ|プロフィール|スタイル/i.test(text))return 'Hot Pepper';
+  if(/リール|キャプション|インスタ|Instagram|投稿/i.test(text))return 'Instagram';
+  if(/動画|編集|(?:映像|撮影|クリップ|シーン|尺).*カット|カット.*(?:映像|撮影|クリップ|シーン|尺)/i.test(text))return '動画編集';
+  if(/EC|店販|商品|在庫/i.test(text))return 'EC企画';
+  if(/売上|お金|経理|支払い/.test(text))return '経理';
+  if(/セミナー|資料|スライド|アイデア|企画/.test(text))return 'マインド';
+  return '社長室';
+}
+function checkDraft({title='',body='',kind}) {
+  const warnings=[],text=title+'\n'+body;
+  for(const word of ['最強','俺','個性派','派手髪','ぶち抜く'])if(text.includes(word))warnings.push('使わない言葉：'+word);
+  if((text.match(/[#＃][^\s#＃]+/gu)||[]).length>=6)warnings.push('ハッシュタグは5個までです。');
+  if(kind==='blog'&&[...title].length>25)warnings.push('ブログのタイトルは25字までです。');
+  if(kind==='blog'||kind==='profile'){
+    if(/[\u{1F000}-\u{1FAFF}\u2600-\u27BF\u2300-\u23FF\uFE0F\u20E3]/u.test(body))warnings.push('本文に絵文字が含まれています。');
+    if(body.includes('・'))warnings.push('本文に中点「・」が含まれています。');
+  }
+  return warnings;
+}
+function recordImagePath(url) {
+  try {
+    const parsed=new URL(url),base=new URL(SUPABASE_URL),prefix='/storage/v1/object/public/records/';
+    return parsed.origin===base.origin&&parsed.pathname.startsWith(prefix)?decodeURIComponent(parsed.pathname.slice(prefix.length)):null;
+  }catch{return null;}
+}
+async function removeRecordFile(path) {
+  if(!path)return;
+  try {await db.storage.from('records').remove([path]);}catch{/* Best effort after record deletion or failed insert. */}
+}
+async function saveRecord({body,tags,file},snapshot=epoch) {
+  let path=null,image_url='';
+  try {
+    if(file){
+      if(!file.type.startsWith('image/'))throw new Error('画像ファイルを選んでください。');
+      const extension=({ 'image/jpeg':'jpg','image/png':'png','image/webp':'webp','image/gif':'gif','image/heic':'heic','image/avif':'avif' })[file.type]||'image';
+      path=`${userId}/${crypto.randomUUID()}.${extension}`;
+      const {error}=await db.storage.from('records').upload(path,file,{contentType:file.type,upsert:false});
+      if(error){path=null;throw error;}
+      image_url=db.storage.from('records').getPublicUrl(path).data.publicUrl;
+      if(!image_url)throw new Error('画像の公開URLを取得できませんでした。');
+    }
+    if(snapshot!==epoch)throw new Error('ログイン状態が変わりました。');
+    const {error}=await db.from('records').insert({body,tags,image_url});if(error)throw error;
+  }catch(error){await removeRecordFile(path);throw error;}
+}
+async function deleteRecord(row) {
+  const {data,error}=await db.from('records').delete().eq('id',row.id).select('id');
+  if(error)throw error;if(!data.length)throw new Error('記録が見つかりません。更新してください。');
+  await removeRecordFile(recordImagePath(row.image_url));
+}
+function renderRecords() {
+  const target=$('record-list');target.replaceChildren();
+  $('record-filter-label').textContent=recordTag?'タグ：'+recordTag:'すべての記録';
+  $('record-filter-clear').hidden=!recordTag;
+  const tagsOf=row=>row.tags.split(/[,，]/).map(tag=>tag.trim()).filter(Boolean);
+  const rows=records.records.filter(row=>!recordTag||tagsOf(row).includes(recordTag));
+  for(const row of rows){
+    const article=element('article','entry');
+    if(row.image_url){
+      // Only display public record images served by the configured Supabase project.
+      if(recordImagePath(row.image_url)){
+        const img=element('img','record-thumbnail');img.src=row.image_url;img.alt='記録の写真';img.loading='lazy';article.append(img);
+      }
+    }
+    article.append(element('p','entry-body',row.body));
+    const tags=element('div','record-tags');
+    for(const tag of [...new Set(tagsOf(row))]){const button=element('button','',tag);button.type='button';button.addEventListener('click',()=>{recordTag=tag;renderRecords();});tags.append(button);}
+    const time=element('time','',dateFormat.format(new Date(row.created_at)));time.dateTime=row.created_at;
+    const remove=element('button','delete','削除');remove.type='button';
+    remove.addEventListener('click',async()=>{const snapshot=epoch;if(!await confirmDelete()||snapshot!==epoch)return;mutate(remove,()=>deleteRecord(row),'記録を削除しました。');});
+    const actions=element('div','entry-actions');actions.append(time,remove);article.append(tags,actions);target.append(article);
+  }
+  if(!rows.length)empty(target,'記録はまだありません。写真やメモを残しておこう。');
+}
+function renderTrends() {
+  const target=$('trend-list');target.replaceChildren();
+  for(const row of records.trend_words){
+    const article=element('article','entry');article.append(element('h3','',row.word),element('p','entry-body',row.memo));
+    const time=element('time','',dateFormat.format(new Date(row.created_at)));time.dateTime=row.created_at;
+    const remove=element('button','delete','削除');remove.type='button';
+    remove.addEventListener('click',async()=>{const snapshot=epoch;if(!await confirmDelete()||snapshot!==epoch)return;mutate(remove,async()=>{
+      const {data,error}=await db.from('trend_words').delete().eq('id',row.id).select('id');if(error)throw error;if(!data.length)throw new Error('ワードが見つかりません。更新してください。');
+    },'ワードを削除しました。');});
+    const actions=element('div','entry-actions');actions.append(time,remove);article.append(actions);target.append(article);
+  }
+  if(!records.trend_words.length)empty(target,'気になるワードを残しておこう。');
+}
+
+function renderAll() { renderFloor();renderInstructions();renderIdeas();renderDrafts();renderRecords();renderTrends(); }
 async function fetchAll() {
   const snapshot = epoch;
   const result=await Promise.all(Object.keys(records).map(async table=> {
@@ -264,9 +362,10 @@ function confirmDelete() {
   return new Promise(resolve=>dialog.addEventListener('close',()=>resolve(dialog.returnValue==='delete'),{once:true}));
 }
 function resetPrivateData() {
-  clearReplies();epoch++;loaded=false;records={instructions:[],ideas:[],summaries:[],drafts:[]};stopMotion();
+  clearReplies();epoch++;loaded=false;records={instructions:[],ideas:[],summaries:[],drafts:[],records:[],trend_words:[]};stopMotion();
   $('workspace').hidden=true;$('login').hidden=false;$('content').hidden=true;
-  for(const id of ['stats','stations','member-list','instruction-list','idea-list','summary-list','draft-list'])$(id).replaceChildren();
+  for(const id of ['stats','stations','member-list','instruction-list','idea-list','summary-list','draft-list','record-list','trend-list'])$(id).replaceChildren();
+  recordTag='';$('record-form').reset();$('trend-form').reset();$('instruction-result').textContent='';
   $('instruction-form').reset();$('idea-form').reset();$('draft-form').reset();$('draft-filter-department').value='';$('login-form').reset();notify('');
   if($('delete-dialog').open)$('delete-dialog').close('cancel');
 }
@@ -320,9 +419,25 @@ function animateOffice(now) {
   motionFrame=requestAnimationFrame(animateOffice);
 }
 for(const select of document.querySelectorAll('.department-select')) {
+  if(select.closest('#instruction-form')){const auto=element('option','','自動（おまかせ）');auto.value='auto';select.append(auto);}
   if(select.dataset.all){const all=element('option','','すべての部署');all.value='';select.append(all);}
   TEAM.forEach(m=>{const option=element('option','',m.dept);option.value=m.dept;select.append(option);});
 }
+
+$('record-filter-clear').addEventListener('click',()=>{recordTag='';renderRecords();});
+$('record-form').addEventListener('submit',event=>{
+  event.preventDefault();const form=event.currentTarget,button=form.querySelector('button');if(button.disabled)return;
+  const snapshot=epoch,payload={body:form.elements.body.value.trim(),tags:form.elements.tags.value.trim(),file:form.elements.photo.files[0]};
+  mutate(button,async()=>{await saveRecord(payload,snapshot);if(snapshot===epoch)form.reset();},'記録を保存しました。');
+});
+$('trend-form').addEventListener('submit',event=>{
+  event.preventDefault();const form=event.currentTarget,button=form.querySelector('button');if(button.disabled)return;
+  const word=form.elements.word.value.trim();if(!word){form.elements.word.setCustomValidity('ワードを入力してください。');form.elements.word.reportValidity();return;}
+  const snapshot=epoch,row={word,memo:form.elements.memo.value.trim()};
+  mutate(button,async()=>{const {error}=await db.from('trend_words').insert(row);if(error)throw error;if(snapshot===epoch)form.reset();},'ワードを保存しました。');
+});
+$('trend-form').elements.word.addEventListener('input',event=>event.target.setCustomValidity(''));
+
 $('today').textContent=new Intl.DateTimeFormat('ja-JP',{year:'numeric',month:'long',day:'numeric',weekday:'short'}).format(new Date());
 document.querySelectorAll('[data-view]').forEach(button=>button.addEventListener('click',()=>showView(button.dataset.view,true)));
 document.querySelector('.brand').addEventListener('click',event=>{event.preventDefault();showView('floor');});
@@ -345,8 +460,10 @@ for(const [id,table] of [['instruction-form','instructions'],['idea-form','ideas
   $(id).addEventListener('submit',event=> {
     event.preventDefault();const form=event.currentTarget,body=form.elements.body.value.trim();
     if(!body){form.elements.body.setCustomValidity('内容を入力してください。');form.elements.body.reportValidity();return;}
-    const row={department:form.elements.department.value,body};if(table==='instructions')row.store=form.elements.store.value;
-    mutate(form.querySelector('button'),async()=>{const {error}=await db.from(table).insert(row);if(error)throw error;form.elements.body.value='';},'保存しました。');
+    const department=table==='instructions'&&form.elements.department.value==='auto'?routeInstruction(body):form.elements.department.value;
+    const row={department,body};if(table==='instructions')row.store=form.elements.store.value;
+    const snapshot=epoch;
+    mutate(form.querySelector('button'),async()=>{const {error}=await db.from(table).insert(row);if(error)throw error;if(snapshot===epoch){form.elements.body.value='';if(table==='instructions')$('instruction-result').textContent=department+'へ保存しました。';}},'保存しました。');
   });
   $(id).elements.body.addEventListener('input',event=>event.target.setCustomValidity(''));
 }

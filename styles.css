@@ -13,3 +13,12 @@
 .draft-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:16px}
 .copy-feedback{font-size:12px;color:var(--green);margin:12px 0;min-height:1.7em}
 @media(max-width:650px){.draft-actions button{flex:1 1 130px}.draft-heading{font-size:14px}}
+
+/* v10 */
+nav{flex-wrap:wrap}nav button{min-width:0;flex:1 1 130px}
+.record-thumbnail{display:block;width:180px;max-width:100%;height:160px;object-fit:cover;border-radius:12px;background:var(--bg)}
+.record-tags{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px}.record-tags button{font-size:12px;padding:5px 12px;background:#eceee2;overflow-wrap:anywhere;max-width:100%}
+.record-filter{align-items:center;justify-content:space-between}.trend-list{margin-top:24px}.trend-list h3{overflow-wrap:anywhere}
+.draft-checks{border-top:1px solid var(--line);margin-top:20px;padding-top:16px;font-size:12px}.draft-checks p{margin:8px 0;color:var(--green)}.draft-checks ul{padding-left:22px;color:#a3544b}
+#instruction-result{display:block;margin-top:8px}
+@media(max-width:650px){nav button{flex:1 1 calc(33.333% - 8px);font-size:11px}.record-filter{flex-wrap:wrap}}
