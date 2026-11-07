@@ -8,7 +8,7 @@ const DRAFT_KINDS = {blog:'ブログ',profile:'プロフィール',review:'口�
 const DRAFT_STATUS = {draft:'下書き',ready:'確定',used:'使用済み'};
 const STORES = {tenjin:'天神',hakata:'博多',common:'共通'};
 const $ = id => document.getElementById(id);
-let db, userId = null, epoch = 0, loaded = false, refreshing = false, view = 'floor';
+let db, userId = null, epoch = 0, loaded = false, refreshing = false, view = 'instructions';
 let records = {instructions:[],ideas:[],summaries:[],drafts:[],records:[],trend_words:[]};
 let recordTag = '';
 let blogVariant = 0, blogPreview = null;
@@ -426,7 +426,7 @@ function acceptSession(session) {
   const next=session?.user?.id || null;
   if(next===userId)return;
   resetPrivateData();userId=next;
-  if(userId){$('login').hidden=true;$('workspace').hidden=false;showView('floor');refresh();}
+  if(userId){$('login').hidden=true;$('workspace').hidden=false;showView('instructions');refresh();}
   else $('login-message').textContent='ログインしてオフィスを開きましょう。';
 }
 // v6's shared requestAnimationFrame timeline, cloned actor, mirrored facing,
